@@ -1,73 +1,127 @@
 const express = require("express");
-const app = express();
+const mongoose = require("mongoose");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 
+const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// 🌍 CORS (GitHub Pages)
+// 🌍 CORS
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Headers", "Content-Type");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
   next();
 });
 
-// 🧠 DATABASE EN MÉMOIRE
-let players = {};
+// 🔗 MongoDB
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => console.log("MongoDB connecté"))
+  .catch(err => console.log(err));
 
-// 🔐 créer / récupérer joueur
-function getPlayer(name) {
-  if (!players[name]) {
-    players[name] = {
-      name,
-      balance: 1000, // argent de départ
-      transactions: [],
-      stats: {
-        actions: 0,
-        houses: 0,
-        cars: 0
-      }
-    };
-  }
-  return players[name];
-}
-
-// 💰 transaction
-app.post("/transaction", (req, res) => {
-  const { player, action, amount } = req.body;
-
-  const p = getPlayer(player);
-
-  const entry = {
-    time: new Date(),
-    action,
-    amount: amount || 0
-  };
-
-  p.transactions.push(entry);
-  p.stats.actions++;
-
-  // 💸 gestion argent simple
-  if (amount) {
-    p.balance += amount;
-  }
-
-  console.log(p);
-
-  res.json({ success: true, player: p });
+// 👤 MODEL
+const Player = mongoose.model("Player", {
+  name: String,
+  password: String,
+  balance: Number,
+  transactions: Array
 });
 
-// 👤 info joueur
-app.get("/player/:name", (req, res) => {
-  const player = getPlayer(req.params.name);
+// 🔐 REGISTER
+app.post("/register", async (req, res) => {
+  const { name, password } = req.body;
+
+  const existing = await Player.findOne({ name });
+  if (existing) return res.json({ error: "User already exists" });
+
+  const hash = await bcrypt.hash(password, 10);
+
+  const player = new Player({
+    name,
+    password: hash,
+    balance: 1000,
+    transactions: []
+  });
+
+  await player.save();
+
+  res.json({ success: true });
+});
+
+// 🔐 LOGIN
+app.post("/login", async (req, res) => {
+  const { name, password } = req.body;
+
+  const player = await Player.findOne({ name });
+  if (!player) return res.json({ error: "User not found" });
+
+  const valid = await bcrypt.compare(password, player.password);
+  if (!valid) return res.json({ error: "Wrong password" });
+
+  const token = jwt.sign({ id: player._id }, process.env.JWT_SECRET);
+
+  res.json({ token });
+});
+
+// 🔒 AUTH
+function auth(req, res, next) {
+  const token = req.headers.authorization;
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch {
+    res.status(401).json({ error: "Unauthorized" });
+  }
+}
+
+// 👤 PROFILE
+app.get("/me", auth, async (req, res) => {
+  const player = await Player.findById(req.user.id);
   res.json(player);
 });
 
-// 📜 toutes les transactions globales (optionnel)
-app.get("/players", (req, res) => {
-  res.json(players);
+// 💰 TRANSACTION (SITE)
+app.post("/transaction", auth, async (req, res) => {
+  const { action, amount } = req.body;
+
+  const player = await Player.findById(req.user.id);
+
+  player.balance += amount;
+
+  player.transactions.push({
+    action,
+    amount,
+    time: new Date()
+  });
+
+  await player.save();
+
+  res.json(player);
+});
+
+// 🎮 TRANSACTION MINECRAFT (SANS TOKEN)
+app.post("/mc/transaction", async (req, res) => {
+  const { name, action, amount } = req.body;
+
+  const player = await Player.findOne({ name });
+  if (!player) return res.json({ error: "Player not found" });
+
+  player.balance += amount;
+
+  player.transactions.push({
+    action,
+    amount,
+    time: new Date()
+  });
+
+  await player.save();
+
+  res.json(player);
 });
 
 app.listen(PORT, () => {
-  console.log("Akuro backend running on port " + PORT);
+  console.log("Secure backend running");
 });
