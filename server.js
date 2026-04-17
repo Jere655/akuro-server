@@ -1,127 +1,108 @@
-const express = require("express");
-const mongoose = require("mongoose");
-const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
+import express from "express";
+import mongoose from "mongoose";
+import cors from "cors";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-
+app.use(cors());
 app.use(express.json());
 
-// 🌍 CORS
-app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  next();
-});
-
-// 🔗 MongoDB
+/* =======================
+   CONNEXION MONGODB
+======================= */
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB connecté"))
   .catch(err => console.log(err));
 
-// 👤 MODEL
-const Player = mongoose.model("Player", {
-  name: String,
-  password: String,
-  balance: Number,
-  transactions: Array
+/* =======================
+   MODEL PLAYER
+======================= */
+const playerSchema = new mongoose.Schema({
+  name: { type: String, unique: true },
+  balance: { type: Number, default: 0 }
 });
 
-// 🔐 REGISTER
-app.post("/register", async (req, res) => {
-  const { name, password } = req.body;
+const Player = mongoose.model("Player", playerSchema);
 
-  const existing = await Player.findOne({ name });
-  if (existing) return res.json({ error: "User already exists" });
-
-  const hash = await bcrypt.hash(password, 10);
-
-  const player = new Player({
-    name,
-    password: hash,
-    balance: 1000,
-    transactions: []
-  });
-
-  await player.save();
-
-  res.json({ success: true });
+/* =======================
+   ROUTE TEST
+======================= */
+app.get("/", (req, res) => {
+  res.json({ message: "Akuro backend is running" });
 });
 
-// 🔐 LOGIN
-app.post("/login", async (req, res) => {
-  const { name, password } = req.body;
-
-  const player = await Player.findOne({ name });
-  if (!player) return res.json({ error: "User not found" });
-
-  const valid = await bcrypt.compare(password, player.password);
-  if (!valid) return res.json({ error: "Wrong password" });
-
-  const token = jwt.sign({ id: player._id }, process.env.JWT_SECRET);
-
-  res.json({ token });
-});
-
-// 🔒 AUTH
-function auth(req, res, next) {
-  const token = req.headers.authorization;
-
+/* =======================
+   GET PLAYER
+======================= */
+app.get("/player/:name", async (req, res) => {
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded;
-    next();
-  } catch {
-    res.status(401).json({ error: "Unauthorized" });
+    const name = req.params.name.toLowerCase();
+
+    let player = await Player.findOne({ name });
+
+    if (!player) {
+      // auto-create player si pas existant
+      player = await Player.create({
+        name,
+        balance: 0
+      });
+    }
+
+    res.json(player);
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
   }
-}
-
-// 👤 PROFILE
-app.get("/me", auth, async (req, res) => {
-  const player = await Player.findById(req.user.id);
-  res.json(player);
 });
 
-// 💰 TRANSACTION (SITE)
-app.post("/transaction", auth, async (req, res) => {
-  const { action, amount } = req.body;
+/* =======================
+   TRANSACTION (BANQUE)
+======================= */
+app.post("/transaction", async (req, res) => {
+  try {
+    const { from, to, amount } = req.body;
 
-  const player = await Player.findById(req.user.id);
+    if (!from || !to || !amount) {
+      return res.status(400).json({ error: "Missing fields" });
+    }
 
-  player.balance += amount;
+    const sender = await Player.findOne({ name: from.toLowerCase() });
+    const receiver = await Player.findOne({ name: to.toLowerCase() });
 
-  player.transactions.push({
-    action,
-    amount,
-    time: new Date()
-  });
+    if (!sender || !receiver) {
+      return res.status(404).json({ error: "Player not found" });
+    }
 
-  await player.save();
+    if (sender.balance < amount) {
+      return res.status(400).json({ error: "Not enough money" });
+    }
 
-  res.json(player);
+    sender.balance -= amount;
+    receiver.balance += amount;
+
+    await sender.save();
+    await receiver.save();
+
+    res.json({
+      message: "Transaction successful",
+      from: sender,
+      to: receiver
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
+  }
 });
 
-// 🎮 TRANSACTION MINECRAFT (SANS TOKEN)
-app.post("/mc/transaction", async (req, res) => {
-  const { name, action, amount } = req.body;
-
-  const player = await Player.findOne({ name });
-  if (!player) return res.json({ error: "Player not found" });
-
-  player.balance += amount;
-
-  player.transactions.push({
-    action,
-    amount,
-    time: new Date()
-  });
-
-  await player.save();
-
-  res.json(player);
-});
+/* =======================
+   START SERVER
+======================= */
+const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log("Secure backend running");
+  console.log(`Server running on port ${PORT}`);
 });
