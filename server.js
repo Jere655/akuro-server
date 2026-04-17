@@ -5,42 +5,69 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// 🌍 CORS (pour GitHub Pages)
+// 🌍 CORS (GitHub Pages)
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Headers", "Content-Type");
   next();
 });
 
-let transactions = [];
+// 🧠 DATABASE EN MÉMOIRE
+let players = {};
 
-// 💰 ajouter transaction
+// 🔐 créer / récupérer joueur
+function getPlayer(name) {
+  if (!players[name]) {
+    players[name] = {
+      name,
+      balance: 1000, // argent de départ
+      transactions: [],
+      stats: {
+        actions: 0,
+        houses: 0,
+        cars: 0
+      }
+    };
+  }
+  return players[name];
+}
+
+// 💰 transaction
 app.post("/transaction", (req, res) => {
-  const { player, action } = req.body;
+  const { player, action, amount } = req.body;
+
+  const p = getPlayer(player);
 
   const entry = {
     time: new Date(),
-    player,
-    action
+    action,
+    amount: amount || 0
   };
 
-  transactions.push(entry);
+  p.transactions.push(entry);
+  p.stats.actions++;
 
-  console.log(entry);
+  // 💸 gestion argent simple
+  if (amount) {
+    p.balance += amount;
+  }
 
-  res.json({ success: true });
+  console.log(p);
+
+  res.json({ success: true, player: p });
 });
 
-// 📜 lire transactions
-app.get("/transactions", (req, res) => {
-  res.json(transactions);
+// 👤 info joueur
+app.get("/player/:name", (req, res) => {
+  const player = getPlayer(req.params.name);
+  res.json(player);
 });
 
-// 🟢 test serveur
-app.get("/", (req, res) => {
-  res.send("Akuro backend is running");
+// 📜 toutes les transactions globales (optionnel)
+app.get("/players", (req, res) => {
+  res.json(players);
 });
 
 app.listen(PORT, () => {
-  console.log("Server running on port " + PORT);
+  console.log("Akuro backend running on port " + PORT);
 });
